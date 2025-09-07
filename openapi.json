@@ -1,62 +1,30 @@
 {
   "openapi": "3.1.0",
-  "info": {
-    "title": "Graph Ingest API",
-    "version": "1.0.0"
-  },
-  "servers": [
-    {
-      "url": "https://graph-ingest-api.onrender.com"
-    }
-  ],
+  "info": { "title": "Graph Ingest API", "version": "1.0.0" },
+  "servers": [{ "url": "https://graph-ingest-api.onrender.com" }],
   "paths": {
     "/health": {
       "get": {
         "operationId": "health",
-        "responses": {
-          "200": {
-            "description": "OK"
-          }
-        }
+        "responses": { "200": { "description": "OK" } }
       }
     },
     "/cypher": {
       "post": {
         "operationId": "runCypher",
         "parameters": [
-          {
-            "in": "header",
-            "name": "x-api-key",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
+          { "in": "header", "name": "x-api-key", "required": true, "schema": { "type": "string" } }
         ],
         "requestBody": {
           "required": true,
           "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "query": {
-                    "type": "string"
-                  },
-                  "params": {
-                    "type": "object"
-                  }
-                },
-                "required": [
-                  "query"
-                ]
-              }
-            }
+            "application/json": { "schema": { "$ref": "#/components/schemas/CypherRequest" } }
           }
         },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } }
           }
         }
       }
@@ -65,30 +33,93 @@
       "post": {
         "operationId": "ingestDoc",
         "parameters": [
-          {
-            "in": "header",
-            "name": "x-api-key",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
+          { "in": "header", "name": "x-api-key", "required": true, "schema": { "type": "string" } }
         ],
         "requestBody": {
           "required": true,
           "content": {
-            "application/json": {
-              "schema": {
-                "type": "object"
-              }
-            }
+            "application/json": { "schema": { "$ref": "#/components/schemas/IngestDocRequest" } }
           }
         },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } }
           }
         }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "CypherRequest": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string" },
+          "params": { "type": "object", "additionalProperties": true }
+        },
+        "required": ["query"]
+      },
+      "Doc": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "url": { "type": "string" },
+          "title": { "type": "string" },
+          "source": { "type": "string" },
+          "published_at": { "type": "string" },
+          "fetched_at": { "type": "string" },
+          "lang": { "type": "string" },
+          "summary": { "type": "string" }
+        },
+        "required": ["id"]
+      },
+      "Entity": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "type": { "type": "string" },
+          "domain": { "type": "string" },
+          "country": { "type": "string" },
+          "aliases": { "type": "array", "items": { "type": "string" } }
+        },
+        "required": ["id", "name", "type"]
+      },
+      "Mention": {
+        "type": "object",
+        "properties": {
+          "doc_id": { "type": "string" },
+          "entity_id": { "type": "string" },
+          "sentences": { "type": "array", "items": { "type": "integer" } },
+          "confidence": { "type": "number" }
+        },
+        "required": ["doc_id", "entity_id"]
+      },
+      "Relation": {
+        "type": "object",
+        "properties": {
+          "start_id": { "type": "string" },
+          "end_id": { "type": "string" },
+          "type": {
+            "type": "string",
+            "description": "IMPACTS, SUPPLIES, PART_OF, LOCATED_IN, or any other value (falls back to RELATES_TO)"
+          },
+          "predicate": { "type": "string" },
+          "evidence_doc": { "type": "string" },
+          "confidence": { "type": "number" }
+        },
+        "required": ["start_id", "end_id"]
+      },
+      "IngestDocRequest": {
+        "type": "object",
+        "properties": {
+          "doc": { "$ref": "#/components/schemas/Doc" },
+          "entities": { "type": "array", "items": { "$ref": "#/components/schemas/Entity" } },
+          "mentions": { "type": "array", "items": { "$ref": "#/components/schemas/Mention" } },
+          "relations": { "type": "array", "items": { "$ref": "#/components/schemas/Relation" } }
+        },
+        "required": ["doc"]
       }
     }
   }
