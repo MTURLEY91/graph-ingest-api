@@ -6,7 +6,7 @@
   },
   "servers": [
     {
-      "url": "https://REPLACE_WITH_YOUR_DEPLOY_URL"
+      "url": https://graph-ingest-api.onrender.com"
     }
   ],
   "paths": {
