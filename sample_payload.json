@@ -1,0 +1,82 @@
+{
+  "doc": {
+    "id": "demo_doc_001",
+    "url": "https://example.com/soec-policy-brief",
+    "title": "SOEC incentives and policy updates",
+    "source": "ExampleSource",
+    "published_at": "2025-09-01T00:00:00Z",
+    "fetched_at": "2025-09-07T10:00:00Z",
+    "lang": "en",
+    "summary": "Brief article about SOEC and policy signals."
+  },
+  "entities": [
+    {
+      "id": "company_shell",
+      "name": "Shell",
+      "type": "Company",
+      "domain": "Economics",
+      "country": "NL",
+      "aliases": [
+        "Royal Dutch Shell"
+      ]
+    },
+    {
+      "id": "tech_soec",
+      "name": "SOEC",
+      "type": "Technology",
+      "domain": "Tech"
+    },
+    {
+      "id": "policy_ira",
+      "name": "Inflation Reduction Act",
+      "type": "Policy",
+      "domain": "Policy",
+      "country": "US"
+    }
+  ],
+  "mentions": [
+    {
+      "doc_id": "demo_doc_001",
+      "entity_id": "company_shell",
+      "sentences": [
+        1,
+        2
+      ],
+      "confidence": 0.9
+    },
+    {
+      "doc_id": "demo_doc_001",
+      "entity_id": "tech_soec",
+      "sentences": [
+        3
+      ],
+      "confidence": 0.85
+    },
+    {
+      "doc_id": "demo_doc_001",
+      "entity_id": "policy_ira",
+      "sentences": [
+        4
+      ],
+      "confidence": 0.8
+    }
+  ],
+  "relations": [
+    {
+      "start_id": "policy_ira",
+      "type": "IMPACTS",
+      "end_id": "tech_soec",
+      "predicate": "subsidies",
+      "evidence_doc": "demo_doc_001",
+      "confidence": 0.75
+    },
+    {
+      "start_id": "company_shell",
+      "type": "RELATES_TO",
+      "end_id": "tech_soec",
+      "predicate": "pilot_projects",
+      "evidence_doc": "demo_doc_001",
+      "confidence": 0.7
+    }
+  ]
+}
