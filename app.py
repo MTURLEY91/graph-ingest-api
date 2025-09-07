@@ -52,7 +52,7 @@ SET doc.url = d.url,
     doc.published_at = d.published_at,
     doc.fetched_at = d.fetched_at,
     doc.lang = d.lang,
-    doc.summary = d.summary;
+    doc.summary = d.summary
 
 UNWIND $entities AS e
 MERGE (ent:Entity {id:e.id})
@@ -61,7 +61,7 @@ SET ent.name = e.name,
     ent.domain = e.domain,
     ent.country = e.country,
     ent.aliases = coalesce(e.aliases, []),
-    ent.updated_at = timestamp();
+    ent.updated_at = timestamp()
 
 UNWIND $mentions AS m
 MATCH (doc:Doc {id:m.doc_id})
@@ -69,7 +69,7 @@ MATCH (ent:Entity {id:m.entity_id})
 MERGE (doc)-[rm:MENTIONS]->(ent)
 SET rm.sentences = coalesce(m.sentences, []),
     rm.confidence = coalesce(m.confidence, 0.0),
-    rm.created_at = coalesce(rm.created_at, timestamp());
+    rm.created_at = coalesce(rm.created_at, timestamp())
 
 UNWIND $relations AS r0
 MATCH (s:Entity {id:r0.start_id}), (t:Entity {id:r0.end_id})
@@ -107,8 +107,9 @@ FOREACH (_ IN CASE WHEN r0.type IS NULL OR r0.type IN ['IMPACTS','SUPPLIES','PAR
       rel.evidence_doc = r0.evidence_doc,
       rel.confidence = coalesce(r0.confidence, 0.0),
       rel.created_at = coalesce(rel.created_at, timestamp())
-);
+)
 """
+
 
 @app.post("/ingest")
 def ingest(payload: dict, x_api_key: str = Header(None)):
