@@ -49,8 +49,6 @@ WITH
   coalesce($entities, [])  AS entities,
   coalesce($mentions, [])  AS mentions,
   coalesce($relations, []) AS relations
-...
-"""
 
 // Upsert the Doc
 MERGE (doc:Doc {id:d.id})
@@ -122,6 +120,7 @@ FOREACH (_ IN CASE WHEN r0.type IS NULL OR r0.type IN ['IMPACTS','SUPPLIES','PAR
       rel.created_at = coalesce(rel.created_at, timestamp())
 )
 """
+
 
 @app.post("/ingest")
 def ingest(payload: dict, x_api_key: str = Header(None)):
