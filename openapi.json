@@ -6,7 +6,7 @@
   },
   "servers": [
     {
-      "url": https://graph-ingest-api.onrender.com"
+      "url": "https://graph-ingest-api.onrender.com"
     }
   ],
   "paths": {
