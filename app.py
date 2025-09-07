@@ -44,7 +44,10 @@ def run_cypher(body: dict, x_api_key: str = Header(None)):
     return run_tx(q, params)
 
 INGEST_CYPHER = r"""
-WITH $doc AS d
+// Carry all payload parts up-front
+WITH $doc AS d, $entities AS entities, $mentions AS mentions, $relations AS relations
+
+// Upsert the Doc
 MERGE (doc:Doc {id:d.id})
 SET doc.url = d.url,
     doc.title = d.title,
@@ -54,7 +57,9 @@ SET doc.url = d.url,
     doc.lang = d.lang,
     doc.summary = d.summary
 
-UNWIND $entities AS e
+// Upsert Entities
+WITH doc, entities, mentions, relations
+UNWIND entities AS e
 MERGE (ent:Entity {id:e.id})
 SET ent.name = e.name,
     ent.type = e.type,
@@ -63,15 +68,18 @@ SET ent.name = e.name,
     ent.aliases = coalesce(e.aliases, []),
     ent.updated_at = timestamp()
 
-UNWIND $mentions AS m
-MATCH (doc:Doc {id:m.doc_id})
+// Mentions (link this doc to entities)
+WITH doc, mentions, relations
+UNWIND mentions AS m
 MATCH (ent:Entity {id:m.entity_id})
 MERGE (doc)-[rm:MENTIONS]->(ent)
 SET rm.sentences = coalesce(m.sentences, []),
     rm.confidence = coalesce(m.confidence, 0.0),
     rm.created_at = coalesce(rm.created_at, timestamp())
 
-UNWIND $relations AS r0
+// Relations between entities (typed if allowed, else RELATES_TO with predicate)
+WITH relations
+UNWIND relations AS r0
 MATCH (s:Entity {id:r0.start_id}), (t:Entity {id:r0.end_id})
 FOREACH (_ IN CASE WHEN r0.type = 'IMPACTS' THEN [1] ELSE [] END |
   MERGE (s)-[rel:IMPACTS]->(t)
@@ -109,7 +117,6 @@ FOREACH (_ IN CASE WHEN r0.type IS NULL OR r0.type IN ['IMPACTS','SUPPLIES','PAR
       rel.created_at = coalesce(rel.created_at, timestamp())
 )
 """
-
 
 @app.post("/ingest")
 def ingest(payload: dict, x_api_key: str = Header(None)):
