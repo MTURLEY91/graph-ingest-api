@@ -43,8 +43,6 @@ def run_cypher(body: dict, x_api_key: str = Header(None)):
         raise HTTPException(400, "query is required")
     return run_tx(q, params)
 
-# replace your existing /ingest route with this:
-
 INGEST_CYPHER = r"""
 WITH $doc AS d
 MERGE (doc:Doc {id:d.id})
@@ -87,7 +85,7 @@ FOREACH (_ IN CASE WHEN r0.type = 'SUPPLIES' THEN [1] ELSE [] END |
   SET rel.predicate = coalesce(r0.predicate, null),
       rel.evidence_doc = r0.evidence_doc,
       rel.confidence = coalesce(r0.confidence, 0.0),
-      rel_created_at = coalesce(rel.created_at, timestamp())
+      rel.created_at = coalesce(rel.created_at, timestamp())
 )
 FOREACH (_ IN CASE WHEN r0.type = 'PART_OF' THEN [1] ELSE [] END |
   MERGE (s)-[rel:PART_OF]->(t)
@@ -116,4 +114,18 @@ FOREACH (_ IN CASE WHEN r0.type IS NULL OR r0.type IN ['IMPACTS','SUPPLIES','PAR
 def ingest(payload: dict, x_api_key: str = Header(None)):
     if x_api_key != API_KEY:
         raise HTTPException(401, "unauthorized")
-    return run_tx(INGEST_CYPHER, payload)
+    try:
+        return run_tx(INGEST_CYPHER, payload)
+    except Exception as e:
+        raise HTTPException(500, f"ingest error: {type(e).__name__}: {e}")
+
+
+@app.get("/diag")
+def diag(x_api_key: str = Header(None)):
+    if x_api_key != API_KEY:
+        raise HTTPException(401, "unauthorized")
+    try:
+        res = run_tx("RETURN 1 AS ok")
+        return {"neo4j_ok": True, "result": res}
+    except Exception as e:
+        return {"neo4j_ok": False, "error": f"{type(e).__name__}: {e}"}
