@@ -44,8 +44,13 @@ def run_cypher(body: dict, x_api_key: str = Header(None)):
     return run_tx(q, params)
 
 INGEST_CYPHER = r"""
-// Carry all payload parts up-front
-WITH $doc AS d, $entities AS entities, $mentions AS mentions, $relations AS relations
+WITH
+  $doc AS d,
+  coalesce($entities, [])  AS entities,
+  coalesce($mentions, [])  AS mentions,
+  coalesce($relations, []) AS relations
+...
+"""
 
 // Upsert the Doc
 MERGE (doc:Doc {id:d.id})
@@ -122,8 +127,14 @@ FOREACH (_ IN CASE WHEN r0.type IS NULL OR r0.type IN ['IMPACTS','SUPPLIES','PAR
 def ingest(payload: dict, x_api_key: str = Header(None)):
     if x_api_key != API_KEY:
         raise HTTPException(401, "unauthorized")
+    safe = {
+        "doc":       payload.get("doc", {}),
+        "entities":  payload.get("entities", []),
+        "mentions":  payload.get("mentions", []),
+        "relations": payload.get("relations", [])
+    }
     try:
-        return run_tx(INGEST_CYPHER, payload)
+        return run_tx(INGEST_CYPHER, safe)
     except Exception as e:
         raise HTTPException(500, f"ingest error: {type(e).__name__}: {e}")
 
