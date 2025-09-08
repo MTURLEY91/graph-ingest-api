@@ -43,6 +43,69 @@ def run_cypher(body: dict, x_api_key: str = Header(None)):
         raise HTTPException(400, "query is required")
     return run_tx(q, params)
 
+# --- Add near top of file ---
+QUERIES = {
+  "bridges_7d": """
+  WITH timestamp() AS now
+  MATCH (a:Entity)-[r]->(b:Entity)
+  WHERE a.domain IS NOT NULL AND b.domain IS NOT NULL
+    AND a.domain <> b.domain
+    AND coalesce(r.created_at,0) >= now - 7*24*3600*1000
+  OPTIONAL MATCH (d:Doc {id:r.evidence_doc})
+  RETURN a.name AS A, a.domain AS A_dom,
+         type(r) AS Rel, coalesce(r.predicate,'') AS Predicate,
+         b.name AS B, b.domain AS B_dom,
+         round(coalesce(r.confidence,0),2) AS Conf,
+         coalesce(d.title, r.evidence_doc) AS SourceTitle, d.url AS SourceURL
+  ORDER BY Conf DESC, A, B LIMIT 20;
+  """,
+  "storage_7d": """
+  WITH timestamp() AS now
+  MATCH (x:Entity)-[r]->(y:Entity)
+  WHERE (y.id='process_battery_storage' OR x.id STARTS WITH 'tech_batt_' OR y.id='loss_storage')
+    AND coalesce(r.created_at,0) >= now - 7*24*3600*1000
+  OPTIONAL MATCH (d:Doc {id:r.evidence_doc})
+  RETURN x.name AS From, type(r) AS Rel, coalesce(r.predicate,'') AS Pred,
+         y.name AS To, round(coalesce(r.confidence,0),2) AS Conf,
+         coalesce(d.title, r.evidence_doc) AS Source, d.url AS URL
+  ORDER BY Conf DESC LIMIT 20;
+  """,
+  "dc_mix": """
+  MATCH (src)-[r:FLOWS_TO]->(:Entity {id:'sub_digital_datacenters'})
+  RETURN src.name AS Input, src.type AS Type, r.value AS Value, r.unit AS Unit, r.year AS Year, r.scenario AS Scenario
+  ORDER BY coalesce(r.value,0) DESC, src.name;
+  """,
+  "efficiency_7d": """
+  WITH timestamp() AS now
+  MATCH (n:Entity)-[r:RELATES_TO {predicate:'reduces_losses'}]->(l:Entity {type:'Loss'})
+  WHERE coalesce(r.created_at,0) >= now - 7*24*3600*1000
+  OPTIONAL MATCH (d:Doc {id:r.evidence_doc})
+  RETURN n.name AS Actor, l.name AS LossBucket, round(coalesce(r.confidence,0),2) AS Conf,
+         coalesce(d.title, r.evidence_doc) AS Source, d.url AS URL
+  ORDER BY Conf DESC;
+  """,
+  "sources_7d": """
+  WITH datetime() AS now
+  MATCH (d:Doc)<-[:MENTIONS]-()
+  WITH d, coalesce(datetime(d.published_at), datetime(d.fetched_at), now) AS dt
+  WHERE dt >= now - duration('P7D')
+  RETURN d.source AS Source, count(*) AS Docs
+  ORDER BY Docs DESC LIMIT 15;
+  """
+}
+
+from fastapi import Body
+
+@app.post("/named")
+def run_named(name: str = Body(..., embed=True), x_api_key: str = Header(None)):
+  if x_api_key != API_KEY:
+    raise HTTPException(401, "unauthorized")
+  q = QUERIES.get(name)
+  if not q:
+    raise HTTPException(400, f"unknown query: {name}")
+  return run_tx(q, {})
+
+
 INGEST_CYPHER = r"""
 WITH
   $doc AS d,
