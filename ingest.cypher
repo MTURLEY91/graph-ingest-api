@@ -24,9 +24,12 @@ FOREACH (_ IN CASE WHEN d.source IS NULL THEN [] ELSE [1] END |
 UNWIND $entities AS e
 MERGE (ent:Entity {id:e.id})
   ON CREATE SET ent:Imported, ent.created_at = timestamp()
-SET ent.name      = e.name,
-    ent.type      = e.type,
-    ent.domain    = e.domain,
+SET ent.name = e.name,
+    ent.type = e.type,
+    ent.domain = CASE
+                   WHEN toLower(e.domain) IN ['tech','physical'] THEN 'Physical'
+                   ELSE e.domain
+                 END,
     ent.country   = e.country,
     ent.aliases   = coalesce(e.aliases, []),
     ent.updated_at= timestamp();
