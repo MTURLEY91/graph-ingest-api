@@ -22,3 +22,15 @@ uvicorn app:app --host 0.0.0.0 --port 8000
 
 ## Health check
 `GET /health` → `{"status":"ok"}`
+
+## Provenance & Imported nodes
+- Ingest fills Doc.fetched_at (retrieval date), source_name, doc_type.
+- New Entities get label :Imported (grey). New Relations get provenance='imported'.
+- Run the promotion query in queries.cypher once a day to turn grey → colored.
+
+### Quick start
+python app.py
+# then in Neo4j Browser:
+#  - run the metrics queries
+#  - run the promotion job when you want
+
