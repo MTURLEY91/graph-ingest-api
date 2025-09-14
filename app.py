@@ -1,14 +1,15 @@
-
 # app.py
-from fastapi import FastAPI, Header, HTTPException
+from typing import Optional
+
+from fastapi import FastAPI, Header, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
 from neo4j import GraphDatabase
 import os
 
-API_KEY = os.environ.get("API_KEY")
+API_KEY   = os.environ.get("API_KEY")
 NEO4J_URI = os.environ.get("NEO4J_URI")
-NEO4J_USER = os.environ.get("NEO4J_USER")
-NEO4J_PASS = os.environ.get("NEO4J_PASS")
+NEO4J_USER= os.environ.get("NEO4J_USER")
+NEO4J_PASS= os.environ.get("NEO4J_PASS")
 
 if not all([API_KEY, NEO4J_URI, NEO4J_USER, NEO4J_PASS]):
     raise RuntimeError("Missing required environment variables: API_KEY, NEO4J_URI, NEO4J_USER, NEO4J_PASS")
@@ -21,12 +22,12 @@ app.add_middleware(
     allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
 )
 
-def run_tx(query: str, params: dict | None = None):
+def run_tx(query: str, params: Optional[dict] = None):
     with driver.session() as s:
         res = s.run(query, params or {})
         try:
             return [r.data() for r in res]
-        except:
+        except Exception:
             return []
 
 @app.get("/health")
@@ -43,8 +44,11 @@ def run_cypher(body: dict, x_api_key: str = Header(None)):
         raise HTTPException(400, "query is required")
     return run_tx(q, params)
 
+# -----------------------
+# Named queries dictionary
+# -----------------------
 QUERIES = {
-"metrics_docs": """
+  "metrics_docs": """
   WITH date() AS today
   MATCH (d:Doc)
   WITH d, date(coalesce(d.published_at, d.fetched_at)) AS ddate
@@ -80,54 +84,47 @@ QUERIES = {
          round(r.confidence - r.prev_confidence,3) AS d_conf,
          coalesce(d.title, doc_id) AS SourceTitle, d.url AS SourceURL
   ORDER BY d_conf DESC LIMIT 25
-  """
+  """,  # <-- the missing comma was here
 
   "storage_7d": """
   WITH timestamp() AS now
   MATCH (x:Entity)-[r]->(y:Entity)
   WHERE (y.id='process_battery_storage' OR x.id STARTS WITH 'tech_batt_' OR y.id='loss_storage')
     AND coalesce(r.created_at,0) >= now - 7*24*3600*1000
-  WITH x,y,r,
-       coalesce(r.evidence_doc, head(coalesce(r.evidence_docs, []))) AS doc_id
+  WITH x,y,r, coalesce(r.evidence_doc, head(coalesce(r.evidence_docs, []))) AS doc_id
   OPTIONAL MATCH (d:Doc {id:doc_id})
   RETURN x.name AS From, type(r) AS Rel, coalesce(r.predicate,'') AS Pred,
          y.name AS To, round(coalesce(r.confidence,0),2) AS Conf,
          coalesce(d.title, doc_id) AS Source, d.url AS URL
-  ORDER BY Conf DESC LIMIT 20;
+  ORDER BY Conf DESC LIMIT 20
   """,
 
   "dc_mix": """
   MATCH (src)-[r:FLOWS_TO]->(:Entity {id:'sub_digital_datacenters'})
   RETURN src.name AS Input, src.type AS Type, r.value AS Value, r.unit AS Unit, r.year AS Year, r.scenario AS Scenario
-  ORDER BY coalesce(r.value,0) DESC, src.name;
+  ORDER BY coalesce(r.value,0) DESC, src.name
   """,
 
   "efficiency_7d": """
   WITH timestamp() AS now
   MATCH (n:Entity)-[r:RELATES_TO {predicate:'reduces_losses'}]->(l:Entity {type:'Loss'})
   WHERE coalesce(r.created_at,0) >= now - 7*24*3600*1000
-  WITH n,l,r,
-       coalesce(r.evidence_doc, head(coalesce(r.evidence_docs, []))) AS doc_id
+  WITH n,l,r, coalesce(r.evidence_doc, head(coalesce(r.evidence_docs, []))) AS doc_id
   OPTIONAL MATCH (d:Doc {id:doc_id})
   RETURN n.name AS Actor, l.name AS LossBucket, round(coalesce(r.confidence,0),2) AS Conf,
          coalesce(d.title, doc_id) AS Source, d.url AS URL
-  ORDER BY Conf DESC;
+  ORDER BY Conf DESC
   """,
-    
-"sources_7d": """
-WITH date() AS today
-MATCH (d:Doc)
-WITH d, date(coalesce(d.published_at, d.fetched_at)) AS ddate, today
-WHERE ddate >= today - duration('P7D')   // inclusive day window
-RETURN coalesce(d.source,'(unknown)') AS Source, count(*) AS Docs
-ORDER BY Docs DESC LIMIT 15;
-"""
 
-
+  "sources_7d": """
+  WITH date() AS today
+  MATCH (d:Doc)
+  WITH d, date(coalesce(d.published_at, d.fetched_at)) AS ddate, today
+  WHERE ddate >= today - duration('P7D')   // inclusive day window
+  RETURN coalesce(d.source,'(unknown)') AS Source, count(*) AS Docs
+  ORDER BY Docs DESC LIMIT 15
+  """
 }
-
-
-from fastapi import Body
 
 @app.post("/named")
 def run_named(name: str = Body(..., embed=True), x_api_key: str = Header(None)):
@@ -138,7 +135,9 @@ def run_named(name: str = Body(..., embed=True), x_api_key: str = Header(None)):
     raise HTTPException(400, f"unknown query: {name}")
   return run_tx(q, {})
 
-
+# -----------------------
+# Ingest Cypher
+# -----------------------
 INGEST_CYPHER = r"""
 WITH
   $doc AS d,
@@ -172,7 +171,12 @@ MERGE (ent:Entity {id:e.id})
   ON CREATE SET ent:Imported, ent.created_at = timestamp()
 SET ent.name       = e.name,
     ent.type       = e.type,
-    ent.domain     = e.domain,
+    ent.domain     = CASE
+                       WHEN e.domain IS NULL THEN ent.domain
+                       WHEN toLower(trim(e.domain)) IN ['tech','technology','transport','energy','electricity','industry','digital','physical']
+                         THEN 'Physical'
+                       ELSE e.domain
+                     END,
     ent.country    = e.country,
     ent.aliases    = coalesce(e.aliases, []),
     ent.updated_at = timestamp()
@@ -208,6 +212,7 @@ FOREACH (_ IN CASE WHEN r0.type = 'IMPACTS' THEN [1] ELSE [] END |
       rel.created_at      = coalesce(rel.created_at, timestamp()),
       rel.updated_at      = timestamp()
 )
+
 // ---- SUPPLIES ----
 FOREACH (_ IN CASE WHEN r0.type = 'SUPPLIES' THEN [1] ELSE [] END |
   MERGE (s)-[rel:SUPPLIES]->(t)
@@ -225,6 +230,7 @@ FOREACH (_ IN CASE WHEN r0.type = 'SUPPLIES' THEN [1] ELSE [] END |
       rel.created_at      = coalesce(rel.created_at, timestamp()),
       rel.updated_at      = timestamp()
 )
+
 // ---- PART_OF ----
 FOREACH (_ IN CASE WHEN r0.type = 'PART_OF' THEN [1] ELSE [] END |
   MERGE (s)-[rel:PART_OF]->(t)
@@ -242,6 +248,7 @@ FOREACH (_ IN CASE WHEN r0.type = 'PART_OF' THEN [1] ELSE [] END |
       rel.created_at      = coalesce(rel.created_at, timestamp()),
       rel.updated_at      = timestamp()
 )
+
 // ---- LOCATED_IN ----
 FOREACH (_ IN CASE WHEN r0.type = 'LOCATED_IN' THEN [1] ELSE [] END |
   MERGE (s)-[rel:LOCATED_IN]->(t)
@@ -259,6 +266,7 @@ FOREACH (_ IN CASE WHEN r0.type = 'LOCATED_IN' THEN [1] ELSE [] END |
       rel.created_at      = coalesce(rel.created_at, timestamp()),
       rel.updated_at      = timestamp()
 )
+
 // ---- Fallback RELATES_TO (uses r0.type as predicate) ----
 FOREACH (_ IN CASE WHEN r0.type IS NULL OR r0.type IN ['IMPACTS','SUPPLIES','PART_OF','LOCATED_IN'] THEN [] ELSE [1] END |
   MERGE (s)-[rel:RELATES_TO {predicate:r0.type}]->(t)
@@ -292,7 +300,6 @@ def ingest(payload: dict, x_api_key: str = Header(None)):
         return run_tx(INGEST_CYPHER, safe)
     except Exception as e:
         raise HTTPException(500, f"ingest error: {type(e).__name__}: {e}")
-
 
 @app.get("/diag")
 def diag(x_api_key: str = Header(None)):
