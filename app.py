@@ -43,7 +43,6 @@ def run_cypher(body: dict, x_api_key: str = Header(None)):
         raise HTTPException(400, "query is required")
     return run_tx(q, params)
 
-# --- Add near top of file ---
 QUERIES = {
   "bridges_7d": """
   WITH timestamp() AS now
@@ -51,48 +50,59 @@ QUERIES = {
   WHERE a.domain IS NOT NULL AND b.domain IS NOT NULL
     AND a.domain <> b.domain
     AND coalesce(r.created_at,0) >= now - 7*24*3600*1000
-  OPTIONAL MATCH (d:Doc {id:r.evidence_doc})
+  WITH a,b,r,
+       coalesce(r.evidence_doc, head(coalesce(r.evidence_docs, []))) AS doc_id
+  OPTIONAL MATCH (d:Doc {id:doc_id})
   RETURN a.name AS A, a.domain AS A_dom,
          type(r) AS Rel, coalesce(r.predicate,'') AS Predicate,
          b.name AS B, b.domain AS B_dom,
          round(coalesce(r.confidence,0),2) AS Conf,
-         coalesce(d.title, r.evidence_doc) AS SourceTitle, d.url AS SourceURL
+         coalesce(d.title, doc_id) AS SourceTitle, d.url AS SourceURL
   ORDER BY Conf DESC, A, B LIMIT 20;
   """,
+
   "storage_7d": """
   WITH timestamp() AS now
   MATCH (x:Entity)-[r]->(y:Entity)
   WHERE (y.id='process_battery_storage' OR x.id STARTS WITH 'tech_batt_' OR y.id='loss_storage')
     AND coalesce(r.created_at,0) >= now - 7*24*3600*1000
-  OPTIONAL MATCH (d:Doc {id:r.evidence_doc})
+  WITH x,y,r,
+       coalesce(r.evidence_doc, head(coalesce(r.evidence_docs, []))) AS doc_id
+  OPTIONAL MATCH (d:Doc {id:doc_id})
   RETURN x.name AS From, type(r) AS Rel, coalesce(r.predicate,'') AS Pred,
          y.name AS To, round(coalesce(r.confidence,0),2) AS Conf,
-         coalesce(d.title, r.evidence_doc) AS Source, d.url AS URL
+         coalesce(d.title, doc_id) AS Source, d.url AS URL
   ORDER BY Conf DESC LIMIT 20;
   """,
+
   "dc_mix": """
   MATCH (src)-[r:FLOWS_TO]->(:Entity {id:'sub_digital_datacenters'})
   RETURN src.name AS Input, src.type AS Type, r.value AS Value, r.unit AS Unit, r.year AS Year, r.scenario AS Scenario
   ORDER BY coalesce(r.value,0) DESC, src.name;
   """,
+
   "efficiency_7d": """
   WITH timestamp() AS now
   MATCH (n:Entity)-[r:RELATES_TO {predicate:'reduces_losses'}]->(l:Entity {type:'Loss'})
   WHERE coalesce(r.created_at,0) >= now - 7*24*3600*1000
-  OPTIONAL MATCH (d:Doc {id:r.evidence_doc})
+  WITH n,l,r,
+       coalesce(r.evidence_doc, head(coalesce(r.evidence_docs, []))) AS doc_id
+  OPTIONAL MATCH (d:Doc {id:doc_id})
   RETURN n.name AS Actor, l.name AS LossBucket, round(coalesce(r.confidence,0),2) AS Conf,
-         coalesce(d.title, r.evidence_doc) AS Source, d.url AS URL
+         coalesce(d.title, doc_id) AS Source, d.url AS URL
   ORDER BY Conf DESC;
   """,
+
   "sources_7d": """
   WITH datetime() AS now
-  MATCH (d:Doc)<-[:MENTIONS]-()
+  MATCH (d:Doc)
   WITH d, coalesce(datetime(d.published_at), datetime(d.fetched_at), now) AS dt
   WHERE dt >= now - duration('P7D')
-  RETURN d.source AS Source, count(*) AS Docs
+  RETURN coalesce(d.source,'(unknown)') AS Source, count(*) AS Docs
   ORDER BY Docs DESC LIMIT 15;
   """
 }
+
 
 from fastapi import Body
 
@@ -113,77 +123,137 @@ WITH
   coalesce($mentions, [])  AS mentions,
   coalesce($relations, []) AS relations
 
-// Upsert the Doc
+// ---------- Doc ----------
 MERGE (doc:Doc {id:d.id})
-SET doc.url = d.url,
-    doc.title = d.title,
-    doc.source = d.source,
+SET doc.url          = d.url,
+    doc.title        = d.title,
+    doc.source       = d.source,        // kept for compatibility
     doc.published_at = d.published_at,
-    doc.fetched_at = d.fetched_at,
-    doc.lang = d.lang,
-    doc.summary = d.summary
+    doc.fetched_at   = d.fetched_at,    // retrieval timestamp
+    doc.lang         = d.lang,
+    doc.summary      = d.summary,
+    doc.type         = coalesce(d.type, doc.type)  // "news" | "report" | "filing" | ...
 
-// Upsert Entities
+// ---------- Source node (optional but useful) ----------
+WITH doc, d, entities, mentions, relations
+FOREACH (_ IN CASE WHEN d.source IS NULL THEN [] ELSE [1] END |
+  MERGE (src:Source {name:d.source})
+    ON CREATE SET src.type = 'publisher'
+  MERGE (doc)-[:PUBLISHED_BY]->(src)
+)
+
+// ---------- Entities (new ones are grey via :Imported) ----------
 WITH doc, entities, mentions, relations
 UNWIND entities AS e
 MERGE (ent:Entity {id:e.id})
-SET ent.name = e.name,
-    ent.type = e.type,
-    ent.domain = e.domain,
-    ent.country = e.country,
-    ent.aliases = coalesce(e.aliases, []),
+  ON CREATE SET ent:Imported, ent.created_at = timestamp()
+SET ent.name       = e.name,
+    ent.type       = e.type,
+    ent.domain     = e.domain,
+    ent.country    = e.country,
+    ent.aliases    = coalesce(e.aliases, []),
     ent.updated_at = timestamp()
 
-// Mentions (link this doc to entities)
+// ---------- Mentions (Doc -> Entity) ----------
 WITH doc, mentions, relations
 UNWIND mentions AS m
 MATCH (ent:Entity {id:m.entity_id})
 MERGE (doc)-[rm:MENTIONS]->(ent)
-SET rm.sentences = coalesce(m.sentences, []),
+SET rm.sentences  = coalesce(m.sentences, []),
     rm.confidence = coalesce(m.confidence, 0.0),
     rm.created_at = coalesce(rm.created_at, timestamp())
 
-// Relations between entities (typed if allowed, else RELATES_TO with predicate)
-WITH relations
+// ---------- Relations (typed + fallback) ----------
+WITH doc, relations
 UNWIND relations AS r0
 MATCH (s:Entity {id:r0.start_id}), (t:Entity {id:r0.end_id})
+
+// ---- IMPACTS ----
 FOREACH (_ IN CASE WHEN r0.type = 'IMPACTS' THEN [1] ELSE [] END |
   MERGE (s)-[rel:IMPACTS]->(t)
-  SET rel.predicate = coalesce(r0.predicate, null),
-      rel.evidence_doc = r0.evidence_doc,
-      rel.confidence = coalesce(r0.confidence, 0.0),
-      rel.created_at = coalesce(rel.created_at, timestamp())
+  SET rel.predicate       = coalesce(r0.predicate, null),
+      rel.evidence_doc    = coalesce(r0.evidence_doc, rel.evidence_doc),
+      rel.evidence_docs   = CASE
+                               WHEN doc.id IS NULL THEN rel.evidence_docs
+                               WHEN rel.evidence_docs IS NULL THEN [doc.id]
+                               WHEN NOT doc.id IN rel.evidence_docs THEN rel.evidence_docs + doc.id
+                               ELSE rel.evidence_docs
+                            END,
+      rel.prev_confidence = rel.confidence,
+      rel.confidence      = coalesce(r0.confidence, rel.confidence, 0.0),
+      rel.provenance      = coalesce(rel.provenance, 'imported'),
+      rel.created_at      = coalesce(rel.created_at, timestamp()),
+      rel.updated_at      = timestamp()
 )
+// ---- SUPPLIES ----
 FOREACH (_ IN CASE WHEN r0.type = 'SUPPLIES' THEN [1] ELSE [] END |
   MERGE (s)-[rel:SUPPLIES]->(t)
-  SET rel.predicate = coalesce(r0.predicate, null),
-      rel.evidence_doc = r0.evidence_doc,
-      rel.confidence = coalesce(r0.confidence, 0.0),
-      rel.created_at = coalesce(rel.created_at, timestamp())
+  SET rel.predicate       = coalesce(r0.predicate, null),
+      rel.evidence_doc    = coalesce(r0.evidence_doc, rel.evidence_doc),
+      rel.evidence_docs   = CASE
+                               WHEN doc.id IS NULL THEN rel.evidence_docs
+                               WHEN rel.evidence_docs IS NULL THEN [doc.id]
+                               WHEN NOT doc.id IN rel.evidence_docs THEN rel.evidence_docs + doc.id
+                               ELSE rel.evidence_docs
+                            END,
+      rel.prev_confidence = rel.confidence,
+      rel.confidence      = coalesce(r0.confidence, rel.confidence, 0.0),
+      rel.provenance      = coalesce(rel.provenance, 'imported'),
+      rel.created_at      = coalesce(rel.created_at, timestamp()),
+      rel.updated_at      = timestamp()
 )
+// ---- PART_OF ----
 FOREACH (_ IN CASE WHEN r0.type = 'PART_OF' THEN [1] ELSE [] END |
   MERGE (s)-[rel:PART_OF]->(t)
-  SET rel.predicate = coalesce(r0.predicate, null),
-      rel.evidence_doc = r0.evidence_doc,
-      rel.confidence = coalesce(r0.confidence, 0.0),
-      rel.created_at = coalesce(rel.created_at, timestamp())
+  SET rel.predicate       = coalesce(r0.predicate, null),
+      rel.evidence_doc    = coalesce(r0.evidence_doc, rel.evidence_doc),
+      rel.evidence_docs   = CASE
+                               WHEN doc.id IS NULL THEN rel.evidence_docs
+                               WHEN rel.evidence_docs IS NULL THEN [doc.id]
+                               WHEN NOT doc.id IN rel.evidence_docs THEN rel.evidence_docs + doc.id
+                               ELSE rel.evidence_docs
+                            END,
+      rel.prev_confidence = rel.confidence,
+      rel.confidence      = coalesce(r0.confidence, rel.confidence, 0.0),
+      rel.provenance      = coalesce(rel.provenance, 'imported'),
+      rel.created_at      = coalesce(rel.created_at, timestamp()),
+      rel.updated_at      = timestamp()
 )
+// ---- LOCATED_IN ----
 FOREACH (_ IN CASE WHEN r0.type = 'LOCATED_IN' THEN [1] ELSE [] END |
   MERGE (s)-[rel:LOCATED_IN]->(t)
-  SET rel.predicate = coalesce(r0.predicate, null),
-      rel.evidence_doc = r0.evidence_doc,
-      rel.confidence = coalesce(r0.confidence, 0.0),
-      rel.created_at = coalesce(rel.created_at, timestamp())
+  SET rel.predicate       = coalesce(r0.predicate, null),
+      rel.evidence_doc    = coalesce(r0.evidence_doc, rel.evidence_doc),
+      rel.evidence_docs   = CASE
+                               WHEN doc.id IS NULL THEN rel.evidence_docs
+                               WHEN rel.evidence_docs IS NULL THEN [doc.id]
+                               WHEN NOT doc.id IN rel.evidence_docs THEN rel.evidence_docs + doc.id
+                               ELSE rel.evidence_docs
+                            END,
+      rel.prev_confidence = rel.confidence,
+      rel.confidence      = coalesce(r0.confidence, rel.confidence, 0.0),
+      rel.provenance      = coalesce(rel.provenance, 'imported'),
+      rel.created_at      = coalesce(rel.created_at, timestamp()),
+      rel.updated_at      = timestamp()
 )
+// ---- Fallback RELATES_TO (uses r0.type as predicate) ----
 FOREACH (_ IN CASE WHEN r0.type IS NULL OR r0.type IN ['IMPACTS','SUPPLIES','PART_OF','LOCATED_IN'] THEN [] ELSE [1] END |
-  MERGE (s)-[rel:RELATES_TO]->(t)
-  SET rel.predicate = coalesce(r0.predicate, r0.type),
-      rel.evidence_doc = r0.evidence_doc,
-      rel.confidence = coalesce(r0.confidence, 0.0),
-      rel.created_at = coalesce(rel.created_at, timestamp())
+  MERGE (s)-[rel:RELATES_TO {predicate:r0.type}]->(t)
+  SET rel.predicate       = coalesce(r0.predicate, r0.type),
+      rel.evidence_doc    = coalesce(r0.evidence_doc, rel.evidence_doc),
+      rel.evidence_docs   = CASE
+                               WHEN doc.id IS NULL THEN rel.evidence_docs
+                               WHEN rel.evidence_docs IS NULL THEN [doc.id]
+                               WHEN NOT doc.id IN rel.evidence_docs THEN rel.evidence_docs + doc.id
+                               ELSE rel.evidence_docs
+                            END,
+      rel.prev_confidence = rel.confidence,
+      rel.confidence      = coalesce(r0.confidence, rel.confidence, 0.0),
+      rel.provenance      = coalesce(rel.provenance, 'imported'),
+      rel.created_at      = coalesce(rel.created_at, timestamp()),
+      rel.updated_at      = timestamp()
 )
 """
-
 
 @app.post("/ingest")
 def ingest(payload: dict, x_api_key: str = Header(None)):
