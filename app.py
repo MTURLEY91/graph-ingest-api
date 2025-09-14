@@ -44,22 +44,43 @@ def run_cypher(body: dict, x_api_key: str = Header(None)):
     return run_tx(q, params)
 
 QUERIES = {
+"metrics_docs": """
+  WITH date() AS today
+  MATCH (d:Doc)
+  WITH d, date(coalesce(d.published_at, d.fetched_at)) AS ddate
+  WHERE ddate >= today - duration('P7D')
+  RETURN coalesce(d.type,'unknown') AS doc_type, count(*) AS docs
+  ORDER BY docs DESC
+  """,
+
   "bridges_7d": """
   WITH timestamp() AS now
   MATCH (a:Entity)-[r]->(b:Entity)
   WHERE a.domain IS NOT NULL AND b.domain IS NOT NULL
     AND a.domain <> b.domain
     AND coalesce(r.created_at,0) >= now - 7*24*3600*1000
-  WITH a,b,r,
-       coalesce(r.evidence_doc, head(coalesce(r.evidence_docs, []))) AS doc_id
+    AND coalesce(r.confidence,0) >= 0.6
+  WITH a,b,r, coalesce(r.evidence_doc, head(coalesce(r.evidence_docs,[]))) AS doc_id
   OPTIONAL MATCH (d:Doc {id:doc_id})
-  RETURN a.name AS A, a.domain AS A_dom,
-         type(r) AS Rel, coalesce(r.predicate,'') AS Predicate,
-         b.name AS B, b.domain AS B_dom,
-         round(coalesce(r.confidence,0),2) AS Conf,
+  RETURN a.name AS A, a.domain AS A_dom, type(r) AS Rel, coalesce(r.predicate,'') AS Pred,
+         b.name AS B, b.domain AS B_dom, round(coalesce(r.confidence,0),2) AS Conf,
          coalesce(d.title, doc_id) AS SourceTitle, d.url AS SourceURL
-  ORDER BY Conf DESC, A, B LIMIT 20;
+  ORDER BY Conf DESC LIMIT 30
   """,
+
+  "momentum_7d": """
+  WITH timestamp() AS now
+  MATCH ()-[r]->()
+  WHERE coalesce(r.updated_at,0) >= now - 7*24*3600*1000
+    AND r.prev_confidence IS NOT NULL
+    AND (coalesce(r.confidence,0) - coalesce(r.prev_confidence,0)) >= 0.05
+  WITH r, coalesce(r.evidence_doc, head(coalesce(r.evidence_docs,[]))) AS doc_id
+  OPTIONAL MATCH (d:Doc {id:doc_id})
+  RETURN type(r) AS Rel, coalesce(r.predicate,'') AS Pred,
+         round(r.confidence - r.prev_confidence,3) AS d_conf,
+         coalesce(d.title, doc_id) AS SourceTitle, d.url AS SourceURL
+  ORDER BY d_conf DESC LIMIT 25
+  """
 
   "storage_7d": """
   WITH timestamp() AS now
