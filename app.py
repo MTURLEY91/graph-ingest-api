@@ -92,15 +92,17 @@ QUERIES = {
          coalesce(d.title, doc_id) AS Source, d.url AS URL
   ORDER BY Conf DESC;
   """,
+    
+"sources_7d": """
+WITH date() AS today
+MATCH (d:Doc)
+WITH d, date(coalesce(d.published_at, d.fetched_at)) AS ddate, today
+WHERE ddate >= today - duration('P7D')   // inclusive day window
+RETURN coalesce(d.source,'(unknown)') AS Source, count(*) AS Docs
+ORDER BY Docs DESC LIMIT 15;
+"""
 
-  "sources_7d": """
-  WITH datetime() AS now
-  MATCH (d:Doc)
-  WITH d, coalesce(datetime(d.published_at), datetime(d.fetched_at), now) AS dt
-  WHERE dt >= now - duration('P7D')
-  RETURN coalesce(d.source,'(unknown)') AS Source, count(*) AS Docs
-  ORDER BY Docs DESC LIMIT 15;
-  """
+
 }
 
 
